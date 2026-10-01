@@ -1,0 +1,93 @@
+name: deploy
+
+# On every push to main: test -> deploy infrastructure -> build & push image -> deploy app -> smoke test.
+# Signs in to Azure with OpenID Connect: GitHub issues a short-lived token that Azure trusts for
+# this repo + environment only. No Azure password or client secret is stored in GitHub.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # needed to request the OIDC token
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    if: vars.AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      PREFIX: ${{ vars.PREFIX || 'rulpm' }}
+      SQL_ADMIN_LOGIN: ${{ vars.SQL_ADMIN_LOGIN }}
+      SQL_ADMIN_OBJECT_ID: ${{ vars.SQL_ADMIN_OBJECT_ID }}
+      DATA_SCIENTIST_PRINCIPAL_ID: ${{ vars.DATA_SCIENTIST_PRINCIPAL_ID }}
+      ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+      API_KEY: ${{ secrets.API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy foundation (Bicep)
+        id: infra
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "foundation-${{ github.run_number }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --query properties.outputs -o json > outputs.json
+          echo "registry=$(jq -r .registryName.value outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "login_server=$(jq -r .registryLoginServer.value outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE="${{ steps.infra.outputs.login_server }}/rul-api:${{ github.sha }}"
+          az acr login --name "${{ steps.infra.outputs.registry }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy app and drift job (Bicep)
+        id: app
+        env:
+          CONTAINER_IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "app-${{ github.run_number }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --query properties.outputs -o json > outputs.json
+          echo "url=$(jq -r .appUrl.value outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          URL="${{ steps.app.outputs.url }}"
+          for i in $(seq 1 20); do
+            if curl -fsS "$URL/health"; then
+              echo; echo "Healthy: $URL"
+              curl -sS "$URL/ready" || true
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "API did not become healthy" >&2
+          exit 1

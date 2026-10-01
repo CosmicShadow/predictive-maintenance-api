@@ -1,0 +1,13 @@
+.git
+.github
+.venv
+data
+artifacts
+model-cache
+tests
+docs
+infra
+scripts
+sql
+*.md
+.env

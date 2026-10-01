@@ -1,0 +1,39 @@
+# Local "on-prem" environment.
+#   docker compose up -d sqlserver          SQL Server 2022 (Developer edition)
+#   docker compose --profile api up --build API container using ./artifacts/model
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${LOCAL_SQL_PASSWORD:?Set LOCAL_SQL_PASSWORD in .env}
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    profiles: ["api"]
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_DIR: /models
+      SQL_TARGET: local
+      LOCAL_SQL_SERVER: sqlserver,1433
+      LOCAL_SQL_PASSWORD: ${LOCAL_SQL_PASSWORD}
+      API_KEY: ${API_KEY:-}
+    volumes:
+      - ./artifacts/model:/models:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+volumes:
+  mssql-data:
