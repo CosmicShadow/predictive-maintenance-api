@@ -37,17 +37,24 @@ az role assignment create --assignee $APP_ID --role Owner `
   --scope "/subscriptions/$SUB/resourceGroups/$RG"
 
 # Trust GitHub tokens from this repo's "production" environment, and nothing else.
+# GitHub's token subject includes immutable owner and repo IDs: repo:<owner>@<ownerId>/<repo>@<repoId>:...
+$OWNER_ID = gh api "users/$($REPO.Split('/')[0])" --jq .id
+$REPO_ID  = gh api "repos/$REPO" --jq .id
+$SUBJECT  = "repo:$($REPO.Split('/')[0])@$OWNER_ID/$($REPO.Split('/')[1])@${REPO_ID}:environment:production"
 @"
 {
   "name": "github-production",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:${REPO}:environment:production",
+  "subject": "$SUBJECT",
   "audiences": ["api://AzureADTokenExchange"]
 }
 "@ | Out-File -Encoding utf8 fc.json
 az ad app federated-credential create --id $APP_ID --parameters "@fc.json"
 Remove-Item fc.json
 ```
+
+If login fails with `AADSTS700213: No matching federated identity record`, the error message shows
+the exact subject GitHub sent. Register that string as the subject.
 
 ## 4. GitHub repository settings
 

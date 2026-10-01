@@ -1,4 +1,6 @@
-﻿# Predictive Maintenance API on Azure
+# Predictive Maintenance API on Azure
+
+[![deploy](https://github.com/CosmicShadow/predictive-maintenance-api/actions/workflows/deploy.yml/badge.svg)](https://github.com/CosmicShadow/predictive-maintenance-api/actions/workflows/deploy.yml)
 
 Predicts how many cycles a jet engine has left before failure (**remaining useful life**, RUL)
 from its recent sensor readings, using NASA's C-MAPSS turbofan dataset (FD001). A PyTorch LSTM
